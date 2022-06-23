@@ -1035,6 +1035,19 @@ _cpp_stack_file (cpp_reader *pfile, _cpp_file *file, include_type type,
 void
 _cpp_mark_file_once_only (cpp_reader *pfile, _cpp_file *file)
 {
+  /* Enter file into unique hash table if this is
+     the first file to be marked only_once.  */
+  if (!pfile->seen_once_only)
+	{
+	  hashval_t hv = unique_file_hash (file);
+	  cpp_file_hash_entry **hash_slot =
+		  (cpp_file_hash_entry **)htab_find_slot_with_hash (pfile->unique_hash, file, hv, INSERT);
+
+	  cpp_file_hash_entry *entry =
+		  (cpp_file_hash_entry *)htab_find_with_hash (pfile->file_hash, file->name, htab_hash_string (file->name));
+	  *hash_slot = entry;
+	}
+
   pfile->seen_once_only = true;
   file->once_only = true;
 }
