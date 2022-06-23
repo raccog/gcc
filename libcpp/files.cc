@@ -189,8 +189,11 @@ static cpp_dir *make_cpp_dir (cpp_reader *, const char *dir_name, int sysp);
 static void allocate_file_hash_entries (cpp_reader *pfile);
 static struct cpp_file_hash_entry *new_file_hash_entry (cpp_reader *pfile);
 static int report_missing_guard (void **slot, void *b);
+static hashval_t unique_file_hash (_cpp_file *p);
 static hashval_t file_hash_hash (const void *p);
+static hashval_t unique_file_hash_hash (const void *p);
 static int file_hash_eq (const void *p, const void *q);
+static int unique_file_hash_eq (const void *p, const void *q);
 static char *read_filename_string (int ch, FILE *f);
 static void read_name_map (cpp_dir *dir);
 static char *remap_filename (cpp_reader *pfile, _cpp_file *file);
@@ -849,12 +852,18 @@ has_unique_contents (cpp_reader *pfile, _cpp_file *file, bool import,
   if (!pfile->seen_once_only)
     return true;
 
-  /* We may have read the file under a different name.  Look
-     for likely candidates and compare file contents to be sure.  */
-  for (_cpp_file *f = pfile->all_files; f; f = f->next_file)
-    {
-      if (f == file)
-	continue; /* It'sa me!  */
+  /* Get hash entry using this file's inode. An entry will be inserted
+     when a file is included for ths first time.  */
+  hashval_t hv = unique_file_hash (file);
+  cpp_file_hash_entry **hash_slot =
+	  (cpp_file_hash_entry **)htab_find_slot_with_hash (pfile->unique_hash, file, hv, INSERT);
+
+  /* If an entry was found, this means the file has been included before.
+     Prevent the file from being stacked twice.  */
+  if (*hash_slot != HTAB_EMPTY_ENTRY
+	  && *hash_slot != HTAB_DELETED_ENTRY)
+	{
+		_cpp_file *f = (*hash_slot)->u.file;
 
       if ((import || f->once_only)
 	  && f->err_no == 0
@@ -880,6 +889,7 @@ has_unique_contents (cpp_reader *pfile, _cpp_file *file, bool import,
 			      && !memcmp (ref_file->buffer, file->buffer,
 					  file->st.st_size));
 
+	  if (same_file_p)
 	  if (f->buffer && !f->buffer_valid)
 	    {
 	      ref_file->path = 0;
@@ -890,7 +900,15 @@ has_unique_contents (cpp_reader *pfile, _cpp_file *file, bool import,
 	    /* Already seen under a different name.  */
 	    return false;
 	}
-    }
+	}
+
+	/* An entry was previously created in _cpp_find_file using the
+	   file name as a hash. Reuse this entry with a hash that is
+	   unique to a file's contents; even across symlinks with
+	   different names.  */
+  cpp_file_hash_entry *entry =
+	  (cpp_file_hash_entry *)htab_find_with_hash (pfile->file_hash, file->name, htab_hash_string (file->name));
+  *hash_slot = entry;
 
   return true;
 }
@@ -1410,6 +1428,24 @@ file_hash_hash (const void *p)
   return htab_hash_string (hname);
 }
 
+/* Calculate the unique hash value of a file P.  */
+
+static hashval_t
+unique_file_hash (_cpp_file *file)
+{
+	return iterative_hash (&file->st.st_ino, sizeof(file->st.st_ino), 0);
+}
+
+/* Calculate the unique hash value of a file hash entry P.  */
+
+static hashval_t
+unique_file_hash_hash (const void *p)
+{
+  struct cpp_file_hash_entry *entry = (struct cpp_file_hash_entry *) p;
+
+  return unique_file_hash (entry->u.file);
+}
+
 /* Compare a string Q against a file hash entry P.  */
 static int
 file_hash_eq (const void *p, const void *q)
@@ -1424,6 +1460,19 @@ file_hash_eq (const void *p, const void *q)
     hname = entry->u.dir->name;
 
   return filename_cmp (hname, fname) == 0;
+}
+
+/* Compare a file Q against a file hash entry P.  */
+static int
+unique_file_hash_eq (const void *p, const void *q)
+{
+  struct cpp_file_hash_entry *entry = (struct cpp_file_hash_entry *) p;
+  _cpp_file *f1 = (_cpp_file *) q;
+  _cpp_file *f2 = entry->u.file;
+
+  return (f1->st.st_mtime == f2->st.st_mtime
+	  && f1->st.st_size == f2->st.st_size
+	  && f1->st.st_ino == f2->st.st_ino);
 }
 
 /* Compare entries in the nonexistent file hash table.  These are just
@@ -1442,6 +1491,8 @@ _cpp_init_files (cpp_reader *pfile)
 					NULL, xcalloc, free);
   pfile->dir_hash = htab_create_alloc (127, file_hash_hash, file_hash_eq,
 					NULL, xcalloc, free);
+  pfile->unique_hash = htab_create_alloc (127, unique_file_hash_hash, unique_file_hash_eq,
+					NULL, xcalloc, free);
   allocate_file_hash_entries (pfile);
   pfile->nonexistent_file_hash = htab_create_alloc (127, htab_hash_string,
 						    nonexistent_file_hash_eq,
@@ -1456,6 +1507,7 @@ _cpp_cleanup_files (cpp_reader *pfile)
 {
   htab_delete (pfile->file_hash);
   htab_delete (pfile->dir_hash);
+  htab_delete (pfile->unique_hash);
   htab_delete (pfile->nonexistent_file_hash);
   obstack_free (&pfile->nonexistent_file_ob, 0);
   free_file_hash_entries (pfile);
