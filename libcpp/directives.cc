@@ -1574,6 +1574,8 @@ do_pragma_once (cpp_reader *pfile)
     cpp_error (pfile, CPP_DL_WARNING, "#pragma once in main file");
 
   check_eol (pfile, false);
+  if (!pfile->seen_once_only)
+    _cpp_first_pragma_once (pfile, pfile->buffer->file);
   _cpp_mark_file_once_only (pfile, pfile->buffer->file);
 }
 

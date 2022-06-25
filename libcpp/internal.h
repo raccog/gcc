@@ -714,6 +714,7 @@ enum _cpp_find_file_kind
 extern _cpp_file *_cpp_find_file (cpp_reader *, const char *, cpp_dir *,
 				  int angle, _cpp_find_file_kind, location_t);
 extern bool _cpp_find_failed (_cpp_file *);
+extern void _cpp_first_pragma_once (cpp_reader *pfile, _cpp_file *file);
 extern void _cpp_mark_file_once_only (cpp_reader *, struct _cpp_file *);
 extern const char *_cpp_find_header_unit (cpp_reader *, const char *file,
 					  bool angle_p,  location_t);
